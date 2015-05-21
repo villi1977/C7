@@ -1,0 +1,7 @@
+*.pdf
+*.ps
+*.wiki
+toc.man
+toc.wiki
+*.8
+*.5

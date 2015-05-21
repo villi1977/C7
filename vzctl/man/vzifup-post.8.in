@@ -1,0 +1,19 @@
+.TH vzifup-post 8 "4 Jul 2011" "OpenVZ" "Containers"
+.SH NAME
+vzifup-post \- add containers' ARP records to an interface
+.SH SYNOPSIS
+vzifup-post \fIDEVICE\fR
+.SH DESCRIPTION
+This script adds the appropriate ARP records for containers' IP addresses
+to a network interface \fIDEVICE\fR. This needs to be done on interface start
+and the script is usually called from system networking scripts.
+.SH OPTIONS
+.TP
+.I DEVICE
+Network interface, e.g. \fBeth0\fR.
+.SH EXIT STATUS
+Returns 0 upon success.
+.SH SEE ALSO
+.BR vzctl (8).
+.SH LICENSE
+Copyright (C) 2000-2011, Parallels, Inc. Licensed under GNU GPL.

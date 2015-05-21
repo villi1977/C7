@@ -1,0 +1,95 @@
+22
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+# On branch master
+# Changes to be committed:
+#   (use "git reset HEAD <file>..." to unstage)
+#
+#	deleted:    ploop2/.gitignore
+#	deleted:    ploop2/.travis.yml
+#	deleted:    ploop2/COPYING
+#	deleted:    ploop2/Makefile
+#	deleted:    ploop2/Makefile.inc
+#	deleted:    ploop2/README.md
+#	deleted:    ploop2/etc/Makefile
+#	deleted:    ploop2/etc/logrotate.d/ploop
+#	deleted:    ploop2/etc/tmpfiles.d/ploop.conf
+#	deleted:    ploop2/gensym.sh
+#	deleted:    ploop2/include/Makefile
+#	deleted:    ploop2/include/dynload.h
+#	deleted:    ploop2/include/libploop.h
+#	deleted:    ploop2/include/linux/blkpg.h
+#	deleted:    ploop2/include/linux/fiemap.h
+#	deleted:    ploop2/include/linux/fs.h
+#	deleted:    ploop2/include/linux/ioctl.h
+#	deleted:    ploop2/include/linux/types.h
+#	deleted:    ploop2/include/ploop1_image.h
+#	deleted:    ploop2/include/ploop_if.h
+#	deleted:    ploop2/lib/.gitignore
+#	deleted:    ploop2/lib/Makefile
+#	deleted:    ploop2/lib/balloon.c
+#	deleted:    ploop2/lib/balloon_util.c
+#	deleted:    ploop2/lib/check.c
+#	deleted:    ploop2/lib/cleanup.c
+#	deleted:    ploop2/lib/cleanup.h
+#	deleted:    ploop2/lib/crc32.c
+#	deleted:    ploop2/lib/delta_read.c
+#	deleted:    ploop2/lib/delta_sysfs.c
+#	deleted:    ploop2/lib/deprecated.c
+#	deleted:    ploop2/lib/di.c
+#	deleted:    ploop2/lib/fsutils.c
+#	deleted:    ploop2/lib/gpt.c
+#	deleted:    ploop2/lib/list.h
+#	deleted:    ploop2/lib/lock.c
+#	deleted:    ploop2/lib/logger.c
+#	deleted:    ploop2/lib/merge.c
+#	deleted:    ploop2/lib/pcopy.c
+#	deleted:    ploop2/lib/ploop-copy.c
+#	deleted:    ploop2/lib/ploop.c
+#	deleted:    ploop2/lib/ploop.h
+#	deleted:    ploop2/lib/snapshot.c
+#	deleted:    ploop2/lib/util.c
+#	deleted:    ploop2/lib/uuid.c
+#	deleted:    ploop2/lib/xml.c
+#	deleted:    ploop2/ploop.spec
+#	deleted:    ploop2/python/libploop/__init__.py
+#	deleted:    ploop2/python/libploop/libploopmodule.c
+#	deleted:    ploop2/python/setup.py
+#	deleted:    ploop2/scripts/Makefile
+#	deleted:    ploop2/scripts/mount.ploop
+#	deleted:    ploop2/scripts/umount.ploop
+#	deleted:    ploop2/setver.sh
+#	deleted:    ploop2/test/test-pcopy.py
+#	deleted:    ploop2/tools/.gitignore
+#	deleted:    ploop2/tools/Makefile
+#	deleted:    ploop2/tools/README
+#	deleted:    ploop2/tools/common.c
+#	deleted:    ploop2/tools/common.h
+#	deleted:    ploop2/tools/macros.tmac
+#	deleted:    ploop2/tools/ploop-balloon.c
+#	deleted:    ploop2/tools/ploop-check.c
+#	deleted:    ploop2/tools/ploop-copy.c
+#	deleted:    ploop2/tools/ploop-grow.c
+#	deleted:    ploop2/tools/ploop-merge.c
+#	deleted:    ploop2/tools/ploop-snapshot.c
+#	deleted:    ploop2/tools/ploop-stat.c
+#	deleted:    ploop2/tools/ploop.8.in
+#	deleted:    ploop2/tools/ploop.c
+#	deleted:    ploop2/tools/ploop.sgml
+#	deleted:    vzctl
+#	deleted:    vzkernel
+#	deleted:    vzkernel_old
+#	deleted:    vzpkg
+#	deleted:    vzquota
+#	deleted:    vzstats
+#
+# Untracked files:
+#   (use "git add <file>..." to include in what will be committed)
+#
+#	ploop/
+#	vzctl2/
+#	vzkernel2/
+#	vzkernel_old2/
+#	vzpkg2/
+#	vzquota2/
+#	vzstats2/

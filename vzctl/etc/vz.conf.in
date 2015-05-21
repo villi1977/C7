@@ -1,0 +1,64 @@
+## Global parameters
+VIRTUOZZO=yes
+LOCKDIR=@VZDIR@/lock
+DUMPDIR=@VZDIR@/dump
+VE0CPUUNITS=1000
+VE_STOP_MODE=suspend
+
+## Logging parameters
+LOGGING=yes
+LOGFILE=/var/log/vzctl.log
+LOG_LEVEL=0
+VERBOSE=0
+
+## Disk quota parameters
+DISK_QUOTA=yes
+VZFASTBOOT=no
+
+# Disable module loading. If set, vz initscript does not load any modules.
+#MODULES_DISABLED=yes
+
+# The name of the device whose IP address will be used as source IP for CT.
+# By default automatically assigned.
+#VE_ROUTE_SRC_DEV="eth0"
+
+# Uncomment to limit CT IP ARP announces only to network interfaces
+# having IPs within the same IP network as a container IP.
+# If you want to explicitly specify interfaces, use "list:eth0 eth1" form.
+# Leave commented out or set to "all" to use all interfaces.
+#NEIGHBOUR_DEVS="detect"
+
+## Uncomment to skip ARP queries checking for CT IP being used
+## by some other machine on the network
+#SKIP_ARPDETECT=yes
+
+## Comment out to fail CT start if ARP query detects CT IP being used
+ERROR_ON_ARPFAIL="no"
+
+## Template parameters
+TEMPLATE=@VZDIR@/template
+
+## Defaults for containers
+VE_ROOT=@VZDIR@/root/$VEID
+VE_PRIVATE=@VZDIR@/private/$VEID
+CONFIGFILE="vswap-256m"
+DEF_OSTEMPLATE="centos-6-x86"
+NAMESERVER=inherit # Copy from host system's /etc/resolv.conf
+## Filesystem layout for new CTs: either simfs or ploop
+VE_LAYOUT=ploop
+
+# User namespace configuration
+LOCAL_UID=100000
+LOCAL_GID=100000
+
+## Load vzwdog module
+VZWDOG="no"
+
+## WARNING: IPTABLES parameter is deprecated,
+## use per-container (not global!) NETFILTER instead
+
+## iptables kernel modules to be loaded by init.d/vz script
+IPTABLES_MODULES="ipt_REJECT ipt_tos ipt_limit ipt_multiport iptable_filter iptable_mangle ipt_TCPMSS ipt_tcpmss ipt_ttl ipt_length ip6_tables ip6table_filter ip6table_mangle ip6t_REJECT"
+
+## Enable IPv6
+IPV6="yes"

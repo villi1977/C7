@@ -1,0 +1,31 @@
+.TH vzpid 8 "18 Mar 2012" "OpenVZ" "Containers"
+.SH NAME
+vzpid \- display the CT ID given the process ID
+.SH SYNOPSIS
+.SY vzpid
+.OP -p
+\fIpid\fR [...]
+.SY vzpid
+.OP -p
+.B -
+.YS
+.SH DESCRIPTION
+This script displays the CT ID the process with the given \fIpid\fR belongs to.
+.SH OPTIONS
+.TP
+.I pid
+The \fIpid\fR of the process to display the CT ID of. Can be specified
+multiple times.
+.TP
+.TP
+.B -p
+Also show the corresponding in-container PID(s).
+.TP
+.B -
+Read PID(s) from the standard input.
+.SH EXIT STATUS
+Returns 0 upon a successful execution.
+.SH SEE ALSO
+.BR vzctl (8).
+.SH LICENSE
+Copyright (C) 2000-2011, Parallels, Inc. Licensed under GNU GPL.

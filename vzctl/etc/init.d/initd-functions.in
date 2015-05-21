@@ -1,0 +1,146 @@
+# A few compatibility functions, to make it possible having the same
+# OpenVZ init scripts for Red Hat/Fedora/Debian/SUSE.
+
+VZCONF=@PKGCONFDIR@/vz.conf
+[ -f ${VZCONF} ] || exit 6
+. ${VZCONF}
+[ "${VIRTUOZZO}" = "no" ] && exit 0
+
+VZCTL=@SBINDIR@/vzctl
+[ -x ${VZCTL} ] || exit 5
+
+rc_done='..done'
+rc_failed='..failed'
+
+VARLOCK=/var/lock/subsys
+
+# Source function library.
+if [ -r /etc/init.d/functions ]; then
+	. /etc/init.d/functions
+	if [ -r /etc/redhat-release ] || [ -r /etc/centos-release ]; then
+		DISTR=redhat
+	fi
+elif [ -r /etc/rc.status ]; then
+	. /etc/rc.status
+	if [ -r /etc/SuSE-release ]; then
+		DISTR=suse
+	fi
+elif [ -r /etc/debian_version ]; then
+	DISTR=debian
+	VARLOCK=/var/lock
+fi
+
+print_success()
+{
+	if [ "$DISTR" = "redhat" ]; then
+		echo_success
+	else
+		echo -n "$rc_done"
+	fi
+	echo
+}
+
+print_failure()
+{
+	echo -n "$1"
+	if [ "$DISTR" = "redhat" ]; then
+		failure $"$1"
+	else
+		echo -n "$rc_failed"
+	fi
+	echo
+}
+
+print_warning()
+{
+	if [ "$DISTR" = "redhat" ]; then
+		echo -n "$1"
+		warning $"$1"
+	else
+		echo -n "- Warning: $1 "
+	fi
+	echo
+}
+
+# Calls either print_success or print_failure, depending on $?
+# Optional argument $1 -- an error string passed to print_failure.
+print_result()
+{
+	if [ $? -eq 0 ] ; then
+		print_success
+	else
+		print_failure "$1"
+	fi
+}
+
+__echo()
+{
+	if [ "$DISTR" = "redhat" ]; then
+		echo -n $"$1"
+	else
+		echo -n "$1"
+	fi
+}
+
+check_vzkernel()
+{
+	if ! test -d /proc/vz ; then
+		echo "Running kernel is not an OpenVZ kernel"
+		exit 6
+	fi
+}
+
+vzdaemon_start()
+{
+	case $DISTR in
+	   redhat)
+		daemon $*
+		;;
+	   suse)
+		startproc $*
+		;;
+	   debian)
+		local p=$1
+		shift
+		start-stop-daemon --start --quiet --exec @SBINDIR@/$p -- $*
+		;;
+	esac
+}
+
+vzdaemon_stop()
+{
+	case $DISTR in
+	   redhat|suse)
+		killproc $*
+		;;
+	   debian)
+		local p=$1
+		shift
+		start-stop-daemon --stop --quiet --oknodo \
+			--exec @SBINDIR@/$p -- $*
+		;;
+	esac
+}
+
+vzdaemon_status()
+{
+	local p=$1
+	shift
+
+	case $DISTR in
+	   redhat|suse)
+		status $p
+		;;
+	   debian)
+		echo -n "Checking status of $p... "
+		start-stop-daemon --start -t --quiet --exec @SBINDIR@/$p -- $*
+		if [ $? -eq 0 ]; then
+			print_success "(running)"
+			return 0
+		else
+			print_failure "(not running)"
+			return 1
+		fi
+		;;
+	esac
+}

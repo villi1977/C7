@@ -1,0 +1,362 @@
+#!/bin/sh
+#  Copyright (C) 2011-2013, Parallels, Inc. All rights reserved.
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software
+#  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+#
+# Download a precreated container tarball (a template cache).
+# Usage: please see usage() below.
+# There are some built-in defaults in this script, those can be changed
+# by editing @PKGCONFDIR@/download.conf
+#
+# Exit codes:
+#  0 -- template downloaded successfully
+#  1 -- download error
+#  2 -- local template file already present, not updating
+#  3 -- error in usage (no argument provided)
+#  4 -- wget binary not found
+#  5 -- GPG signature check failed
+#
+# If you want this script to do automatic GPG signature checking, you need
+# to have gpg binary installed, and OpenVZ public key to be in your keyring.
+# The latter can be achieved by running the following command as root:
+#   gpg --search-keys security@openvz.org
+# For more details, see gpg(1) man page and the following link:
+#   http://wiki.openvz.org/Package_signatures#Importing_the_public_key
+
+
+# Wget is required for this script to function
+wget -V >/dev/null || exit 4
+
+. @SCRIPTDIR@/vps-functions
+. @PKGCONFDIR@/vz.conf
+test -r @PKGCONFDIR@/download.conf && . @PKGCONFDIR@/download.conf
+
+# Prefix to template cache repository URL
+: ${TMPL_REPO_PREFIX="http://download.openvz.org/template/precreated"}
+# What directories to use
+: ${TEMPLATE_REPOS="${TMPL_REPO_PREFIX}"}
+# Uncomment this to enable 'beta' (new) templates
+#TEMPLATE_REPOS="${TEMPLATE_REPOS} ${TMPL_REPO_PREFIX}/beta/"
+# Uncomment this to enable 'unsupported' (old) templates
+#TEMPLATE_REPOS="${TEMPLATE_REPOS} ${TMPL_REPO_PREFIX}/unsupported"
+
+: ${TMPL_SUFFIXES="tar.gz"}
+: ${GPG_KEY="security@openvz.org"}
+: ${CHECK_TEMPLATE_SIG="no"}
+: ${UPDATE_TEMPLATE="yes"}
+: ${IGNORE_ERRORS="no"}
+: ${QUIET="no"}
+unset UPDATE_LIST
+unset WGET_QUIET
+
+vzcheckvar TEMPLATE
+TCACHEDIR=$TEMPLATE/cache
+SELF=$(basename $0)
+
+usage()
+{
+	cat << =EOF= 1>&2
+Usage:
+  $SELF [option ...] <template> [<template> ...]
+  $SELF [option ...] --update-all
+  $SELF --list-remove | --list-local | --list-all | --list-orphans
+  $SELF --config | --help
+Options:
+  --gpg-check		Check GPG signatures of downloaded files
+  --no-gpg-check	Do not check GPG signatures
+  --ignore-errors	Don't abort if a template can't be downloaded
+  --update		Update templates even if they exist locally
+  --no-update		Do not try to update existing templates
+  --quiet		Be less talkative (shut up wget)
+  --no-quiet		Be more talkative
+  --update-all		Try to update all locally available templates
+  --list-remote		Output list of templates available for download
+  --list-local		Output list of templates available locally
+  --list-all		Output combined list of templates
+  --list-orphans	Output list of local templates NOT available remotely
+  --config		Output current configuration
+  --help		Print this help
+Arguments:
+  <template>		An OS template name (like centos-6-x86_64)
+=EOF=
+	exit $1
+}
+
+gpg_working()
+{
+	test "x$CHECK_TEMPLATE_SIG" != "xyes" && return 0
+
+	# Check if gpg is installed
+	if ! gpg --version >/dev/null; then
+		CHECK_TEMPLATE_SIG=no
+		echo "$SELF WARNING: gpg binary not found," \
+			"signature check disabled" 1>&2
+		return 1
+	fi
+
+	# ... and our key is there
+	if ! gpg -k "$GPG_KEY" >/dev/null 2>&1; then
+		CHECK_TEMPLATE_SIG=no
+		cat << =EOF= 1>&2
+
+$SELF WARNING: no public gpg key $GPG_KEY found,
+disabling signature check. To import the public key, see
+http://wiki.openvz.org/Package_signatures#Importing_the_public_key
+
+=EOF=
+		return 2
+	fi
+}
+
+show_config()
+{
+	local url
+
+	gpg_working
+
+	cat << =EOF=
+Current $SELF configuration is below. Defaults are built-in and can be
+overwritten by setting an appropriate variables in @PKGCONFDIR@/download.conf
+
+* Try to update template files (\$UPDATE_TEMPLATE): $UPDATE_TEMPLATE
+* Check template signatures (\$CHECK_TEMPLATE_SIG): $CHECK_TEMPLATE_SIG
+* GPG public key name to check (\$GPG_KEY):         $GPG_KEY
+* List of template suffixes (\$TMPL_SUFFIXES):      $TMPL_SUFFIXES
+* Prefix to template cache repository URL (\$TMPL_REPO_PREFIX):
+  $TMPL_REPO_PREFIX
+* List of template URLs to try (\$TEMPLATE_REPOS):
+=EOF=
+
+	for url in $TEMPLATE_REPOS; do
+		echo "  ${url}"
+	done
+}
+
+# There's no generic way to ask a web server about list of files
+# in a directory, so we rely on having a .listing file next to templates.
+list_remote()
+{
+	local url
+	local cache=/tmp/$SELF-list
+
+	umask 0770
+	# Cache the result for 1 minute
+	if test -z "$(find $cache -mmin -1 2>/dev/null)"; then
+		for url in $TEMPLATE_REPOS; do
+			wget -q -O - $url/.listing
+		done > $cache
+	fi
+
+	cat $cache
+}
+
+list_local()
+{
+	ls ${TCACHEDIR}/*.tar    ${TCACHEDIR}/*.tar.gz  \
+	   ${TCACHEDIR}/*.tar.xz ${TCACHEDIR}/*.tar.bz2	2>/dev/null |
+		sed -e "s#^${TCACHEDIR}/##" -e 's#\.tar\.*[gbxz2]*$##'
+}
+
+list_orphans()
+{
+	local LOCAL=$(list_local)
+	local REMOTE=$(list_remote)
+	local t
+
+	for t in $LOCAL; do
+		if ! echo "$REMOTE" | grep -q "^$t$"; then
+			echo $t
+		fi
+	done | sort | uniq
+}
+
+# Parse arguments
+while echo $1 | grep -q '^-'; do
+	case $1 in
+	   --gpg-check)
+		CHECK_TEMPLATE_SIG=yes
+		shift
+		;;
+	   --no-gpg-check)
+		CHECK_TEMPLATE_SIG=no
+		shift
+		;;
+	   --ignore-errors)
+		IGNORE_ERRORS=yes
+		shift
+		;;
+	   --update)
+		UPDATE_TEMPLATE=yes
+		shift
+		;;
+	   --no-update)
+		UPDATE_TEMPLATE=no
+		shift
+		;;
+	   --quiet)
+		QUIET=yes
+		shift
+		;;
+	   --no-quiet)
+		QUIET=no
+		shift
+		;;
+	   --update-all)
+		UPDATE_LIST=$(list_local)
+		UPDATE_TEMPLATE=yes
+		IGNORE_ERRORS=yes
+		shift
+		;;
+	   --config)
+		show_config
+		exit 0
+		;;
+	   --list-all)
+		(list_local; list_remote) | sort | uniq
+		exit 0
+		;;
+	   --list-remote)
+		list_remote
+		exit 0
+		;;
+	   --list-local)
+		list_local
+		exit 0
+		;;
+	   --list-orphans)
+		list_orphans
+		exit 0
+		;;
+	   --help)
+		usage 0
+		;;
+	   -*)
+		echo "$SELF ERROR: unknown option: $1" 1>&2
+		usage 3
+		;;
+	esac
+done
+
+if [ "$QUIET" = "yes" ]; then
+	WGET_QUIET="--quiet"
+fi
+
+if [ -n "$UPDATE_LIST" ]; then
+	if [ $# -gt 1 ]; then
+		echo "$SELF ERROR: too many arguments" 1>&2
+		usage 3
+	fi
+else
+	if [ $# -lt 1 ]; then
+		echo "$SELF ERROR: no arguments" 1>&2
+		usage 3
+	fi
+fi
+
+check_sig()
+{
+	test "x${CHECK_TEMPLATE_SIG}" = "xyes" || return 0
+
+	local sig=$1.asc
+	local file=$2
+	local ret
+
+	echo "Checking template signature..."
+
+	wget -q $sig || return 1
+	sig=$(basename $sig)
+
+	gpg --verify $sig $file
+	ret=$?
+	rm -f $sig
+
+	if test "$ret" != "0"; then
+		echo "$SELF ERROR: signature check failed!" 1>&2
+		return 5
+	else
+		echo "Signature check passed."
+		return 0
+	fi
+}
+
+do_download()
+{
+	local src=$1
+	local dst=$2
+	local ret
+
+	trap "rm -f ${dst}" INT TERM
+	wget $WGET_QUIET -P $(dirname ${dst}) -N ${src}
+	ret=$?
+	trap - INT TERM
+	if test $ret -eq 0; then
+		check_sig $src $dst
+		return
+	else
+		echo "$SELF ERROR: failed to download ${src}!" 1>&2
+		rm -f $dst
+		return 1
+	fi
+}
+
+download()
+{
+	local prefix suffix src dst
+	local tmpl=$1
+
+	for prefix in $TEMPLATE_REPOS; do
+		for suffix in $TMPL_SUFFIXES; do
+			src=${prefix}/${tmpl}.${suffix}
+			dst=$TCACHEDIR/${tmpl}.${suffix}
+			# Check for local copy
+			if test -f $dst -a "$UPDATE_TEMPLATE" = "no"; then
+				echo "$SELF ERROR: file $dst is present," \
+					"not updating." 1>&2
+				return 2
+			fi
+			# Check if the file is there
+			if wget -q --spider -P $(dirname ${dst}) ${src}; then
+				# Download it
+				do_download "$src" "$dst"
+				return
+			fi
+		done
+	done
+	echo "$SELF ERROR: template $tmpl not found!" 1>&2
+	return 1
+}
+
+gpg_working
+
+FAILED_TMPL=""
+for TMPL in ${UPDATE_LIST:-$*}; do
+	download $TMPL
+	RET=$?
+	if [ $RET -ne 0 ]; then
+		if [ "$IGNORE_ERRORS" = "yes" ]; then
+			FAILED_TMPL="$FAILED_TMPL $TMPL"
+		else
+			exit $RET
+		fi
+	fi
+done
+
+if [ ! -z "$FAILED_TMPL" ]; then
+	echo WARNING: the following templates were not found remotely and can\'t be updated:
+	for TMPL in $FAILED_TMPL; do
+		echo " " $TMPL 1>&2
+	done
+fi

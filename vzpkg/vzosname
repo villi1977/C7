@@ -1,0 +1,20 @@
+#!/bin/bash
+# $Id: vzosname,v 1.2 2006/05/11 14:23:39 kir Exp $
+#
+# vzosname - "canonize" given OS template name.
+#
+# Copyright (C) 2005, SWsoft. Licensed under GNU GPL.
+# By Kir Kolyshkin.
+
+TOOLDIR=/usr/share/vzpkg
+#DEBUG_LEVEL=4
+
+. ${TOOLDIR}/functions
+
+OST=`ost2full $1` || exit 1
+set $OST
+OSNAME=$1
+OSVER=$2
+OSSET=$3
+OSARCH=$4
+echo $OSNAME-$OSVER-$OSARCH-$OSSET

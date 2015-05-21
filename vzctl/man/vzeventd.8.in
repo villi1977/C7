@@ -1,0 +1,60 @@
+.TH vzeventd 8 "7 Apr 2015" "OpenVZ" "Containers"
+.SH NAME
+vzeventd \- the OpenVZ events daemon.
+.SH SYNOPSIS
+.SY vzeventd
+.OP \-v
+.OP \-d
+.YS
+.SY vzeventd
+.B \-h
+.YS
+.SH DESCRIPTION
+This daemon takes care of events sent by the OpenVZ kernel
+(via a netlink socket) and performs required actions associated with
+those events, by running specific scripts. Every event received contains
+an event name and a container ID.
+.P
+For every known event, the event script @SCRIPTDIR@/vzevent-\fIevent_name\fR
+is executed, with container ID being passed to the script as
+\fBVEID\fR environment variable. Not-existent events scripts are ignored.
+All unknown events are ignored but logged.
+.TP
+The following events are recognized:
+.br
+.B \(bu start
+.br
+.B \(bu stop
+.br
+.B \(bu mount
+.br
+.B \(bu umount
+.br
+.B \(bu reboot
+.P
+The following event scripts are provided:
+.TP
+.B vzevent-stop
+Takes care of removing ARP and routing records for the given CT from CT0.
+.TP
+.B vzevent-reboot
+Takes care of rebooting a given CT.
+.SH OPTIONS
+.TP
+.B \-v
+Increase verbosity (can be used multiple times).
+.TP
+.B \-d
+Debug mode (do not daemonize, run in foreground).
+.TP
+.B -h
+Display help and exit.
+.SH EXIT STATUS
+Returns 0 upon success.
+.SH LICENSE
+Copyright (C) 2010-2015, Parallels, Inc. Licensed under GNU GPL.
+.SH AUTHOR
+.PP
+This manual page was initially written by Thorsten Schifferdecker
+<tsd@debian.systs.org>
+for the \fBDebian GNU/Linux\fP system (but may be used by others).

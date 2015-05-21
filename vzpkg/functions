@@ -1,0 +1,552 @@
+#!/bin/bash
+# $Id: functions,v 1.24 2006/05/11 14:28:35 kir Exp $
+#
+# Copyright (C) 2004, 2005, 2006, SWsoft. Licensed under GNU GPL v.2.
+# By Kir Kolyshkin.
+#
+# Various definitions and functions used by vzpkg tools.
+
+
+# Set some parameters; can be overwritten by scripts.
+test -z "$PROGNAME"	&& PROGNAME=`basename $0`
+test -z "$VZP_LOGFILE"	&& VZP_LOGFILE=/var/log/vzpkg.log
+test -z "$DEBUG_LEVEL"	&& DEBUG_LEVEL=3
+
+# Some handy definitions
+VZCTL=/usr/sbin/vzctl
+VZLOCKDIR=/vz/lock
+VECFGDIR_OLD=/etc/sysconfig/vz-scripts/
+VZCFG_OLD=/etc/sysconfig/vz
+VECFGDIR=/etc/vz/conf/
+VZCFG=/etc/vz/vz.conf
+VZLIB_SCRIPTDIR=/usr/lib/vzctl/scripts
+YUM=/usr/share/vzyum/bin/yum
+ARCHES="i386 x86_64 ia64 x86"
+
+# check that configs are in right place - use old values otherwise
+if ! test -d "$VECFGDIR"; then
+	VECFGDIR=$VECFGDIR_OLD
+fi
+if ! test -f "$VZCFG"; then
+	VZCFG=$VZCFG_OLD
+fi
+
+# Handy functions
+
+# Generic log; please use logN instead.
+function log()
+{
+	local level=$1; shift
+	test $level -gt $DEBUG_LEVEL && return 0
+	local addstr
+	case $level in
+		1) addstr="ERROR: " ;;
+		2) addstr="Warning: " ;;
+		3) addstr="" ;;
+		4) addstr="Debug: " ;;
+		5) addstr="ExtDebug: " ;;
+		*) addstr="-UNKNOWN_LEVEL- " ;;
+	esac
+
+	local msg="${addstr}$*"
+	# Warnings and errors goes to stderr
+	if test $level -lt 3; then
+		echo -e $msg 1>&2
+	else
+		echo -e $msg
+	fi
+	# Log to file
+	if ! test -z "$VZP_LOGFILE"; then
+		local date=`LANG=C date "+%b %d %H:%M:%S"`
+		local logmsg="$date [$PROGNAME] $msg"
+		echo -e "$logmsg" >> $VZP_LOGFILE
+	fi
+}
+
+function log1()
+{
+	log 1 $*
+}
+
+function log2()
+{
+	log 2 $*
+}
+
+function log3()
+{
+	log 3 $*
+}
+
+function log4()
+{
+	log 4 $*
+}
+
+function log5()
+{
+	log 5 $*
+}
+
+# Report error and exit
+function abort()
+{
+	log 1 $*
+	exit 1
+}
+
+# Calls template-specific script to be run from host system (VE0)
+# Parameters:
+#  $1 - tdir
+#  $2 - script name
+function call_template_script()
+{
+	local tdir=$1
+	local script=$tdir/config/$2
+	if ! test -x $script; then
+		log4 "Script $script not found " \
+			"or non-exec: skipped"
+		return 0
+	fi
+	# Prepare script environment
+	set -u
+	export VE_ROOT
+	export VE_PRIVATE
+	export TEMPLATE
+	export BASEDIR
+	export VEID
+	export VZCTL
+	set +u
+	export RPM=`get_rpm $tdir`
+	log4 Calling script $script
+	# Run script
+	$script
+}
+
+## Borrowed from vzpkgtools
+
+# Locks the VE
+# Parameters:
+#  $1 - VE ID
+function lock_ve()
+{
+    local ntries=0 file=$VZLOCKDIR/$1.lck warned=0
+    while [ $ntries -le 3 ]; do
+	ntries=$[ntries+1]
+	if lockfile -1 -r1 $file 2>/dev/null; then
+	    echo -e "$$\nupdating" >$file
+	    return
+	else
+	    [ -f $file ] || abort "Cannot create $file lockfile"
+	    local pid=`cat $file 2>/dev/null`
+	    pid=`echo $pid | awk '{print $1}'`
+	    if [ "$pid" -a -e /proc/$pid/cmdline ]; then
+		if [ $warned -eq 0 ]; then
+		    log2 "VE $1 locked by pid=$pid"
+		    warned=1
+		fi
+		continue
+	    else
+		log2 "Removing stale lockfile $file, pid=$pid"
+		rm -f $file
+	    fi
+	fi
+    done
+    abort "Too many retries waiting for lockfile $file"
+}
+
+# Unlocks VE
+# Parameters:
+#  $1 - VE ID
+function unlock_ve()
+{
+    local file=$VZLOCKDIR/$1.lck
+#   log4 Unlocking VE $1
+    rm -f $file
+}
+
+function lock_ve_silent()
+{
+    local ntries=0 file=$VZLOCKDIR/$1.lck
+    while [ $ntries -le 3 ]; do
+	ntries=$[ntries+1]
+	if lockfile -1 -r1 $file 2>/dev/null; then
+	    echo -e "$$\nupdating" >$file
+	    return 0
+	else
+	    [ -f $file ] || return 1
+	    local pid=`cat $file 2>/dev/null`
+	    pid=`echo $pid | awk '{print $1}'`
+	    if [ "$pid" -a -e /proc/$pid/cmdline ]; then
+	    	continue
+	    else
+		log2 "Removing stale lockfile $file, pid=$pid"
+		rm -f $file
+	    fi
+	fi
+    done
+    return 1
+}
+
+
+# Find and lock nearest veid
+#
+function find_lock_nearest_veid()
+{
+    [ $# -eq 1 ] ||
+	abort "$FUNCNAME: usage $FUNCNAME OLD_VEID"
+    local old_veid=$1
+
+    local veid=$old_veid
+    while ((++veid != old_veid)) ; do
+	[ -f $VECFGDIR/$veid.conf ] && continue
+    	lock_ve $veid
+	rc=$?
+   	[ $rc -eq 0 ] && {
+	    [ -f $VECFGDIR/$veid.conf ] && {
+		unlock_ve $veid
+		continue
+	    }
+	    local status
+	    status=`$VZCTL status $veid`
+	    # vzctl status should always return 0; if not, something is
+	    # really wrong (e.g. /dev/vzctl is missing).
+	    if test $? -ne 0; then
+		unlock_ve $veid
+		abort "$FUNCNAME: 'vzctl status' command returned" \
+			"non-zero exit code, which should not happen." \
+			"See /var/log/vzctl.log for details"
+	    fi
+	    echo "$status" | grep -q 'deleted unmounted down' || {
+		unlock_ve $veid
+		continue
+	    }
+	    # use get_vz_var since VE config file not exist
+	    local private=`VEID=$veid get_vz_var VE_PRIVATE`
+	    [ -e "$private" ] && {
+		unlock_ve $veid
+		continue
+	    }
+	    > $VECFGDIR/$veid.conf
+	    echo $veid
+	    return 0
+	}
+    done
+    return 1
+}
+
+# Returns requested variable from global VZ config file 
+function get_vz_var()
+{
+	local gotdef=1
+	local value=`eval "source $VZCFG && echo \\\$$1"`
+	# We have defaults for two most requested things
+	if test -z "$value"; then
+		case $1 in
+			PACKAGES)
+				value='/vz/packages'
+				;;
+			TEMPLATE)
+				value='/vz/template'
+				;;
+			*)
+				gotdef=0
+		esac
+		if test $gotdef -ne 0; then
+			log2 "Variable $1 not found in $VZCFG;" \
+				"using default ($value)."
+		else
+			log2 "Variable $1 not found in $VZCFG;" \
+				"using empty string."
+		fi
+	fi
+	echo $value
+}
+
+# Returns some value from VE configuration file. Parameters:
+#   $1 - needed variable name
+#   $VEID - VE ID
+function get_ve_var()
+{
+	local vecfg=$VECFGDIR/$VEID.conf
+	local value=`eval "source $vecfg && echo \\\$$1"`
+	echo $value
+}
+
+
+# Checks if VE ID is valid number
+# Parameters:
+#  $1 - VE ID
+function check_veid()
+{
+	[ "x$1" = 'x0' ] && abort "Operations with VE 0 does not supported"
+	echo $1 | egrep -q '^[[:digit:]]+$'
+}
+
+function get_arch() {
+	# Ideally, we'd use uname -i to get canonical arch (i386 on x86 box).
+	# But gentoo folks have patched it to return smth like "GenuineIntel"
+	# so we have to use uname -m instead and convert the result.
+	local arch=`uname -m`
+	case $arch in
+		i?86)
+			echo i386
+			;;
+		*)
+			echo $arch
+			;;
+	esac
+}
+
+
+# Converts user-specified OS template name to fully specifed OS template name.
+# Parameters:
+#  $1 - OS template name, can be in one of the following forms:
+#       osname-osversion-set-arch
+#       osname-osversion-set
+#       osname-osversion-arch
+#       osname-osversion
+# Returns:
+#  all four components of OS template, and path to template metadata,
+#  separated by spaces:
+#	name version set arch directory
+# Exit code is 0 if such osname-osversion exists, and 1 otherwise.
+#
+# NOTE that this function does NOT check:
+#  1. Whether such 'arch' exists for this OS template.
+#  2. Whether such 'set' exists for this OS template.
+# This should be checked in a separate functions (for the sake of better diags). 
+function ost2full()
+{
+	local ost=$1 oname over oset oarch tost tdir
+	local template=$TEMPLATE
+	if test -z "$template"; then
+		template=`get_vz_var TEMPLATE`
+	fi
+	# Try to extract arch first
+	for oarch in $ARCHES; do
+		# Case -arch is last
+		tost=${ost%-${oarch}}
+		# Case -arch is not last
+		[ "$tost" = "$ost" ] && tost=${ost/-${oarch}/}
+		# Arch found
+		[ "$tost" = "$ost" ] || break
+		oarch=''
+	done
+	# If arch not found, set it.
+	[ -z "$oarch" ] && oarch=`get_arch`
+	# If arch is x86, set it to i386
+	[ "$oarch" == 'x86' ] && oarch='i386'
+
+	# Now tost should be osname-osversion or osname-osversion-set.
+	oset='default'
+	# If $TEMPLATE/$tost directory exists, we do not extract set field.
+	tdir=`echo $tost | sed 's@-\([^-][^-]*\)$@/\1@'`
+	if ! test -d $template/$tdir; then
+		# Let's check the number of dashes.
+		if test `echo -n "$tost" | sed 's/[^-]//g' | 
+				wc -c` -ge 2; then
+			# Two or more dashes - try to extract 'set' field.
+			oset=`echo $tost | awk -F - '{print $NF}'`
+			tost=${tost%-${oset}}
+			tdir=`echo $tost | sed 's@-\([^-][^-]*\)$@/\1@'`
+			[ -d "$template/$tdir" ] || return 1
+		fi
+	fi
+	# Now tost should be osname-osversion
+	# Split it.
+	oname=${tost%-*}
+	# Check that there was at least one '-' in tost.
+	[ "$oname" = "$tost" ] && return 1
+	over=${tost#${oname}-}
+	[ -z "$over" ] && return 1
+	[ -d "$template/$oname/$over" ] || return 1
+
+	tdir=$template/$oname/$over/$oarch
+#	echo "name=$oname version=$over set=$oset arch=$oarch"
+	ost="$oname $over $oset $oarch $tdir"
+	echo $ost
+}
+
+# Checks if given OS template exists
+# Parameters: same as returned by ost2full
+# Return: 0 if template exists; non-zero otherwise
+function check_ost_exists()
+{
+	test $# -lt 4 && abort "$FUNCNAME: invalid parameters"
+	local osname=$1 osver=$2 osset=$3 osarch=$4
+	local template=$TEMPLATE
+	if test -z "$template"; then
+		template=`get_vz_var TEMPLATE`
+	fi
+	if ! test -d $template; then
+		log1 "Directory $template not exists!"
+		return 2
+	elif ! test -d $template/$osname/$osver; then
+		log2 "OS template $osname-$osver not exists!"
+		return 1
+	elif ! test -d $template/$osname/$osver/$osarch; then
+		log2 "No $osname-$osver OS template found for "\
+			"$osarch architecture"
+		return 1
+	elif ! test -f $template/$osname/$osver/$osarch/config/$osset.list; then
+		log2 "Set $osset for $osname-$osver-$osarch " \
+			"OS template not found"
+		return 1
+	fi
+	return 0
+}
+
+# Returns list of packages to be installed into VE.
+# Parameters:
+#  $1 - TDIR
+#  $2 - OS SET
+function get_packages()
+{
+	local template=$TEMPLATE
+	[ -z "$template" ] && template=`get_vz_var TEMPLATE`
+	local tdir=$1
+	local osset=$2
+	local cfgdir=$tdir/config
+	local file=$cfgdir/${osset}.list
+	cat $file | egrep -v '^#|^[[:space:]]*$'
+}
+
+function get_ve_os_template()
+{
+	test -z "$VEID" && abort "get_ve_os_template(): VEID is not set!"
+
+	OSTEMPLATE=`get_ve_var OSTEMPLATE`
+	test -z "$OSTEMPLATE" && abort "OSTEMPLATE is not set for VE $VEID!"
+	if echo $OSTEMPLATE | fgrep -q '/'; then
+		abort "VE $VEID can not be used with vzpkg utilities."
+	fi
+}
+
+# Returns -c parameters needed for yum.
+function yum_conf()
+{
+	local tdir=$1
+	local template=$TEMPLATE
+	if test -z "$template"; then
+		template=`get_vz_var TEMPLATE`
+	fi
+	local cfg=$tdir/config/yum.conf
+	# FIXME: check for osset-specific yum.conf
+	test -f $cfg || abort "yum repository config file " \
+		"($cfg) not found!"
+	echo "-c $cfg"
+}
+
+
+# Import gpgkeys from OS template's config/gpgkeys directory to the VE.
+# Parameters:
+#  $1 - template dir
+# Environment: VE_ROOT should be set.
+function import_gpgkeys()
+{
+	local tdir=$1
+	test -z "$tdir" && abort "$FUNCNAME: argument missing"
+	test -z "$VE_ROOT" && abort "$FUNCNAME: VE_ROOT not set"
+	local keydir=$tdir/config/gpgkeys
+	test -d $keydir || return
+	local file
+	local files=''
+	for file in $keydir/*; do
+		files="$files $file"
+	done
+	
+	if ! test -z "$files"; then
+		rpm=`get_rpm $tdir`
+		log4 "Importing RPM GPG keys: $files"
+		$rpm --root $VE_ROOT --import $files
+	fi
+}
+
+
+# Gets VE ID from command line argument
+function get_veid()
+{
+	VEID=$1
+	if ! check_veid $VEID; then
+		log1 "VE ID is not a number: $VEID"
+		usage 1
+	fi
+	VE_ROOT=`get_vz_var VE_ROOT`
+	VE_PRIVATE=`get_vz_var VE_PRIVATE`
+}
+
+function get_cache_dir() {
+	test -z "$TEMPLATE" && abort "get_cache_dir: TEMPLATE not set"
+
+	echo $TEMPLATE/cache
+}
+
+function get_all_os_templates() {
+	local template=$TEMPLATE
+	[ -z "$template" ] && template=`get_vz_var TEMPLATE`
+	# Here we need it to be ended by slash
+	echo $template | egrep -q '/$' || template="${template}/"
+
+	# /vz/template/fedora-core/3/i386/config/default.list
+	local list=`find $template -maxdepth 5 -mindepth 5 \
+		-type f -name \*.list | \
+		egrep '/config/[^/]*\.list' | \
+		sed -e "s@^${template}@@" -e 's@/config@@' \
+			-e 's/.list$//' -e 's@/@-@g'`
+
+	echo $list
+}
+
+function get_pythonver() {
+	python -c 'import sys; v=sys.version_info; \
+		print "%d.%d" % (v[0], v[1])'
+}
+
+function get_rpm_path()
+{
+	local tdir=$1
+	[ -z "$tdir" ] && abort "$FUNCNAME: tdir argument missing"
+	local cfgdir=$tdir/config
+	local rpmf=$cfgdir/rpm
+	test -f $rpmf || abort "File $rpmf not found!"
+	local rpmver=`cat $rpmf`
+	local path=/usr/share/vzpkgtools/vzrpm${rpmver}
+	test -d $path || abort "vzrpm${rpmver} path not found: $path"
+	echo $path
+}
+
+function get_rpm()
+{
+	local rpm=`get_rpm_path $1`/bin/rpm
+	test -x $rpm || abort "RPM not found or non-executable: $rpm"
+	echo $rpm
+}
+
+function get_rpm_pythonhome()
+{
+	local pyver=`get_pythonver`
+	local path=`get_rpm_path $1`/lib${MARK64}/python${pyver}/site-packages
+	test -d $path || abort "RPM python path not found: $path"
+	echo $path
+}
+
+function get_rpmlib_path()
+{
+        local path=`get_rpm_path $1`/lib${MARK64}
+        test -d $path || abort "RPM lib path not found: $path"
+        echo $path
+}
+
+function is_64bit()
+{
+# Here we assume that all the architectures but i*86 are 64bit :)
+	case $1 in
+	i*86)
+		echo -n
+		;;
+	*)
+		echo -n 64
+		;;
+	esac
+}

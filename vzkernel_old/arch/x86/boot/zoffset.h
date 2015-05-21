@@ -1,0 +1,10 @@
+#define ZO__end 0x00000000004aa000
+#define ZO_efi_pe_entry 0x0000000000000210
+#define ZO_efi_stub_entry 0x0000000000000230
+#define ZO_input_data 0x00000000000002c2
+#define ZO_startup_32 0x0000000000000000
+#define ZO_startup_64 0x0000000000000200
+#define ZO_z_extract_offset 0x0000000000aea000
+#define ZO_z_extract_offset_negative 0xffffffffff516000
+#define ZO_z_input_len 0x000000000048fdb3
+#define ZO_z_output_len 0x0000000000f68960

@@ -1,0 +1,53 @@
+#!/sbin/runscript
+
+depend() {
+	use net
+	before vz
+}
+
+check_config() {
+	source /etc/conf.d/vz
+	# if we don't want openvz running, say so
+	[ "${VIRTUOZZO}" = "yes" ] || return 1
+	: ${VZEVENTD:=@SBINDIR@/vzeventd}
+}
+
+load_module() {
+	if [ "${MODULES_DISABLED}" != "yes" ]; then
+		local rv=0
+		ebegin "Loading vzevent module"
+		modprobe -r vzevent >/dev/null 2>&1
+		modprobe vzevent reboot_event=1 >/dev/null 2>&1
+		rv=$?
+		if [ ${rv} -ne 0 ]; then
+			eend ${rv}
+			return ${rv}
+		fi
+	fi
+
+	local param=/sys/module/vzevent/parameters/reboot_event
+	echo 1 > "${param}"
+	if ! grep -Fqw 1 "${param}"; then
+		ewarn "vzevent module should be loaded with reboot_event=1 parameter"
+		return 1
+	fi
+	return 0
+}
+
+start() {
+	[ -d /proc/vz ] || return
+	check_config || return
+	load_module || return
+
+	ebegin "Starting vzeventd"
+	start-stop-daemon --start --exec ${VZEVENTD} \
+		-- ${VZEVENTD_OPTS}
+	eend $?
+}
+
+stop() {
+	check_config || return
+	ebegin "Stopping vzeventd"
+	start-stop-daemon --stop --exec ${VZEVENTD}
+	eend $?
+}

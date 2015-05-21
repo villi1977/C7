@@ -1,0 +1,43 @@
+.TH vzpkgcache 8 "May 11, 2006" "OpenVZ" "Virtual Environments"
+.SH NAME
+vzpkgcache \- create a tarball (cache) of VE private area
+.SH SYNOPSIS
+\fBvzpkgcache\fR [\fB-f\fR|\fB--force\fR] [\fIosname\fR [...]]
+.br
+\fBvzpkgcache\fR [\fB-r\fR|\fB--remove\fR] \fIosname\fR [...]
+.br
+\fBvzpkgcache\fR \fB-h\fR|\fB--help\fR
+.SH DESCRIPTION
+This utility creates a tarballs of the potential VE for all available
+(or specified) OS templates and puts them into \fB\f(CW/vz/template/cache/\fR
+directory. Such tarball (also known as "OS template cache") is to be
+used later during \fB\f(CWvzctl create\fR stage -- it is simply deployed
+into the VE private area.
+.P
+If no \fIosname\fRs are given, all OS templates are worked on. This rule
+is not applied when using \fB-r\fR option -- in this case you have to specify
+\fIosname\fR explicitly.
+.SH OPTIONS
+.TP
+\fB\-f\fR, \fB\-\-force\fR
+Force new tarball creation. Without this option, and if cache for given
+OS template already exists, utility tries to update its packages. With
+this option, cache tarball is created "from scratch".
+.TP
+\fB\-r\fR, \fB\-\-remove\fR
+Remove caches for given OS template(s).
+.SH FILES
+\fB\f(CW/etc/sysconfig/vz\fR
+.br
+\fB\f(CW/usr/share/vzpkg/*\fR
+.SH DIAGNOSTICS
+\fBvzpkgcache\fR returns 0 upon successful execution. 
+If anything goes wrong, it returns 1
+and prints a diagnostic message on stderr.
+.SH SEE ALSO
+.BI vzctl (8)\fR,
+.BI vzyum (8)\fR.
+.SH COPYRIGHT
+Copyright (C) 2005, 2006, SWsoft. Distributed under GNU GPL.
+.SH AUTHOR
+Kir Kolyshkin <kir@openvz.org>

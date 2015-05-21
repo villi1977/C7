@@ -1,0 +1,7 @@
+#!/bin/bash
+# $Id: vzpkgrm,v 1.3 2006/05/11 14:20:35 kir Exp $
+# Copyright (C) 2004, 2005, SWsoft. Licensed under GNU GPL v.2.
+
+VEID=$1
+shift
+exec /usr/bin/vzrpm $VEID -e $*

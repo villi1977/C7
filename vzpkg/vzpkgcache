@@ -1,0 +1,80 @@
+#!/bin/bash
+# $Id: vzpkgcache,v 1.6 2006/05/11 14:23:39 kir Exp $
+#
+# vzpkgcache - create cached tarball for OS packages.
+#
+# Copyright (C) 2005 by SWsoft. Licensed under GNU GPL.
+# By Kir Kolyshkin.
+
+TOOLDIR=/usr/share/vzpkg
+#DEBUG_LEVEL=4
+
+. ${TOOLDIR}/functions
+
+log4 Started $0 $*
+
+function usage() {
+        cat << USAGE_EOF 1>&2
+Usage:	$PROGNAME [-f|--force] [osname ...] -- create/update OS cache(s)
+	$PROGNAME -r|--remove osname [...]  -- remove OS cache(s)
+	$PROGNAME -h|--help                 -- see this
+USAGE_EOF
+        exit $1
+}
+
+OPTION=""
+
+case $1 in
+	-f|--force)
+		FORCE=1
+		OPTION="-f"
+		shift
+		;;
+	-r|--remove)
+		REMOVE=1
+		OPTION="-r"
+		shift
+		;;
+	-h|-?|--help)
+		usage 0
+		;;
+	-*)
+		echo "Error: unknown option: $1" 1>&2
+		usage 1
+		;;
+esac
+
+TEMPLATE=`get_vz_var TEMPLATE`
+
+if test $# -gt 0; then
+	# Have list of OS templates from cmdline
+	ALLTMPL=$*
+	for T in $ALLTMPL; do
+		FT=`ost2full $T` || abort "OS template $T not found"
+		set $FT
+		TNAME=$1-$2-$4-$3
+		check_ost_exists $1 $2 $3 $4 ||
+			abort "OS template $T ($TNAME) not found"
+		OST_LIST="$OST_LIST $TNAME"
+	done
+else
+	# Sanity check -- refuse to remove all OS templates
+	if test "x$REMOVE" != "x"; then
+		cat << R_EOF 1>&2
+Error: refusing to remove all OS caches. Please specify OS name(s)
+which cache(s) you want to remove and re-run, e.g. $PROGNAME -r myos-3.1
+R_EOF
+		usage 1
+	fi
+	log5 "TEMPLATE=$TEMPLATE"
+
+	OST_LIST=`get_all_os_templates`
+fi
+
+test -z "$OST_LIST" && abort "No osnames given/found."
+
+# Do the cache
+for OS in $OST_LIST; do
+	log4 "Calling cache-os $OPTION $OS"
+	$TOOLDIR/cache-os $OPTION $OS
+done

@@ -1,0 +1,635 @@
+#!/bin/sh
+#  Copyright (C) 2000-2009, Parallels, Inc. All rights reserved.
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software
+#  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+#
+# OpenVZ startup script, used for redhat and debian related distributions.
+
+###
+# chkconfig: 2345 96 20
+# description: OpenVZ startup script.
+###
+
+### BEGIN INIT INFO
+# Provides: vz
+# Required-start: $network $remote_fs $syslog
+# Required-stop:  $network $remote_fs $syslog
+# Should-Start:  sshd vzeventd
+# Should-Stop:  sshd vzeventd
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: OpenVZ startup script
+# Description: OpenVZ startup script.
+### END INIT INFO
+
+
+# This line is needed to cheat /etc/init.d/rc who expects action word
+
+. @SCRIPTDIR@/initd-functions
+
+VZQUOTA=@SBINDIR@/vzquota
+CONFIG_DIR=@VPSCONFDIR@
+VZREBOOTDIR=@VZREBOOTDIR@
+LOCKFILE=$VARLOCK/vz_lock
+SUBSYS_VZ=$VARLOCK/vz
+VESTAT=/proc/vz/vestat
+VZDEV=venet0
+PRELOAD_MODULES=
+MODULES=
+MODULES_OTHER=
+NET_MODULES=
+IPT_MODULES=
+
+if [ "${MODULES_DISABLED}" != "yes" ]; then
+	PRELOAD_MODULES="af_packet"
+	MODULES="vzmon vzdquota vzdev"
+	CPT_MODULES="vzcpt vzrst"
+	MODULES_OTHER="vzcompat vziolimit ${CPT_MODULES}"
+	VNET_MODULES="vznetdev vznet"
+	VETH_MODULES="vzethdev"
+	NET_MODULES="${VNET_MODULES} ${VETH_MODULES}"
+	if [ "${VZWDOG}" = "yes" ]; then
+		MODULES="${MODULES} vzwdog"
+	fi
+	if [ -z "$IPTABLES_MODULES" ]; then
+		if [ -n "$IPTABLES" ]; then
+			echo "WARNING: IPTABLES in vz.conf is obsoleted, " 1>&2
+			echo "please use IPTABLES_MODULES instead" 1>&2
+			IPTABLES_MODULES="$IPTABLES"
+		fi
+	fi
+	IPT_MODULES="ip_tables ${IPTABLES_MODULES} xt_tcpudp"
+	if [ "${IPV6}" = "yes" ]; then
+		IPT_MODULES="${IPT_MODULES} ${IP6TABLES}"
+	fi
+	VZFS_MODULES="simfs"
+	PLOOP_MODULES="ploop pfmt_ploop1 pfmt_raw pio_direct pio_nfs pio_kaio"
+fi
+
+
+VEINFO=""
+RETVAL=0
+cd /
+
+get_kernel_version()
+{
+	[ ! -z "$KERNEL_MAJOR" ] && return
+
+	local ver=$(uname -r)
+	local kernel=$(echo $ver | sed s/[-+].*//)
+	KERNEL_MAJOR=$(echo $kernel | awk -F . '{print $1}')
+	KERNEL_MINOR=$(echo $kernel | awk -F . '{print $2}')
+	KERNEL_PATCHLEVEL=$(echo $kernel | awk -F . '{print $3}')
+}
+
+check_kernel_config()
+{
+	test -r /proc/config.gz || return 0
+
+	local conf opt err=0
+	local opt_must="SIM_FS VE VE_CALLS VZ_GENCALLS"
+	get_kernel_version
+	# For kernels >= 2.6.9 VZ_DEV must be set.
+	test "${KERNEL_MINOR}" -ge 6 &&
+		test "${KERNEL_PATCHLEVEL}" -gt 9 &&
+			opt_must="${opt_must} VZ_DEV"
+#	local opt_rec="SCHED_VCPU FAIRSCHED VZ_QUOTA VZ_QUOTA_UGID VE_NETDEV VE_ETHDEV
+#			VE_IPTABLES VZ_CHECKPOINT VZ_WDOG"
+
+	conf="`zcat /proc/config.gz 2>/dev/null | grep -E -v '^#|^$'`"
+
+	for opt in $opt_must; do
+		if ! echo "$conf" 2>/dev/null | grep -q "$opt="; then
+			echo "ERROR: Missing kernel config option: CONFIG_$opt"
+			err=1
+		fi
+	done
+	if [ $err != 0 ]; then
+		print_failure "Please recompile your kernel."
+		exit 1
+	fi
+}
+
+mount_cgroups()
+{
+	local g
+	for g in beancounter container fairsched ; do
+		if [ -d /proc/vz/$g ]; then
+			mount -t cgroup $g /proc/vz/$g -o name=$g 2>/dev/null
+		fi
+	done
+}
+
+umount_cgroups()
+{
+	local g
+	for g in beancounter container fairsched ; do
+		umount /proc/vz/$g 2>/dev/null
+	done
+}
+
+get_parallel()
+{
+	[ -n "${VE_PARALLEL}" -a "${VE_PARALLEL}" != "0" ] && return
+	VE_PARALLEL=`awk '
+BEGIN { num=0; }
+$1 == "processor" { num++; }
+END { print num * 4; }' /proc/cpuinfo`
+}
+
+get_veinfo()
+{
+	if [ -f /proc/vz/veinfo ]; then
+		VEINFO=/proc/vz/veinfo
+	elif [ ! -f $VESTAT ]; then
+		return 1
+	fi
+	return 0
+}
+
+is_running()
+{
+	get_veinfo || return 1
+	[ -f $SUBSYS_VZ ] || return 1
+}
+
+# Add /vz to PRUNEPATHS in /etc/updatedb.conf so updatedb won't:
+# 1 clog its database with lots of file entries
+# 2 interfere with vzctl umount
+fix_updatedb() {
+	local file="/etc/updatedb.conf"
+	local var="PRUNEPATHS"
+	local add
+
+	test -r $file || return
+	add=$(printf "$VE_ROOT\n$VE_PRIVATE" | \
+		sed -e 'N;s/^\(.*\).*\n\1.*$/\1/' -e 's@/[^/]*$@@')
+	test "$add" = "/" && return
+	test -d "$add" || return
+	grep -qw "^${var}" $file || return
+	grep -qE "^${var}.* ${add}[\" ]" $file && return
+	__echo "Adding ${add} to ${var} in ${file}:"
+	sed -i.rpmsave \
+		"s@\(^${var}[^\"]*\"[^\"]*\)\(\".*\)\$@\1 ${add}\2@" $file
+	print_result
+}
+
+status()
+{
+	check_vzkernel
+
+	if is_running; then
+		echo "OpenVZ is running..."
+		return 0
+	else
+		echo "OpenVZ is stopped."
+		return 3
+	fi
+}
+
+start_net()
+{
+	local mod
+
+	# load all kernel modules needed for containers networking
+	for mod in ${NET_MODULES}; do
+		modprobe ${mod} 2>/dev/null
+	done
+
+	if ip addr list | grep -q "venet0:.*UP" 2>/dev/null; then
+		return 0
+	fi
+
+	get_veinfo
+	if [ -z "$VEINFO" ]; then
+		return 0
+	fi
+	__echo "Bringing up interface $VZDEV: "
+	ip link set $VZDEV up
+	print_result
+	ip addr add 0.0.0.0/0 dev $VZDEV
+	if [ "${IPV6}" = "yes" ]; then
+		ip -6 addr add fe80::1/128 dev $VZDEV
+	fi
+	sysctl -q -w net.ipv4.conf.$VZDEV.send_redirects=0
+	if [ "$(sysctl -n -e net.ipv4.ip_forward)" != "1" ]; then
+		print_warning "IP forwarding is not enabled"
+	fi
+}
+
+stop_net()
+{
+	local mod
+
+	if ip addr list | grep -q "venet0:.*UP" 2>/dev/null; then
+		__echo "Bringing down interface $VZDEV: "
+		ip link set $VZDEV down
+		print_result
+	fi
+	for mod in ${NET_MODULES}; do
+		/sbin/modprobe -r ${mod} > /dev/null 2>&1
+	done
+}
+
+setup_ve0()
+{
+	mount_cgroups
+
+	if test -z "${VE0CPUUNITS}"; then
+		echo "Warning: VE0CPUUNITS is not set in ${VZCONF}; using value of 1000"
+		VE0CPUUNITS=1000
+	fi
+	msg=`${VZCTL} set 0 --cpuunits ${VE0CPUUNITS} 2>&1`
+	if [ $? -ne 0 ]; then
+		print_failure "vzctl set 0 --cpuunits ${VE0CPUUNITS} failed: $msg"
+	fi
+
+	if ! test -f "${CONFIG_DIR}/0.conf"; then
+		return
+	fi
+	if ! grep -q '^ONBOOT=yes\|^ONBOOT=\"yes\"' ${CONFIG_DIR}/0.conf;
+	then
+		return
+	fi
+	__echo "Configure node UB resources: "
+	msg=`$VZCTL set 0 --reset_ub 2>&1`
+	print_result "$msg"
+}
+
+start_ves()
+{
+	local veid
+	local velist
+	local msg
+	local need_restart
+	local iter=0
+	local header
+	local pid pids
+
+	need_restart=""
+	# CTs that were running before a reboot
+	velist=$(ls $VZREBOOTDIR)
+	rm -f $VZREBOOTDIR/*
+	# ... and not have ONBOOT=no
+	test -n "$velist" && velist=$(vzlist -aH -octid,onboot $velist |
+			awk '$2 != "no" {print $1}')
+	# ... plus ones with ONBOOT=yes
+	velist=$(echo "$velist"; vzlist -aH -octid,onboot |
+			awk '$2 == "yes" {print $1}')
+	# Then sort by bootorder
+	test -n "$velist" && velist=$(vzlist -aH -octid -s-bootorder $velist)
+	sysctl -q -w net.ipv4.route.src_check=0
+	get_parallel
+	for veid in $velist; do
+		[ "${veid}" = "0" ] && continue
+		if [ "x${VZFASTBOOT}" = "xyes" -a "x${DISK_QUOTA}" = "xyes" ];
+		then
+			$VZQUOTA stat ${veid} >/dev/null 2>&1
+			if [ $? -eq 6 ]; then
+				if $VZQUOTA show ${veid} 2>&1 | grep "vzquota : (warning) Quota is running" >/dev/null 2>&1; then
+					$VZQUOTA on ${veid} --nocheck >/dev/null 2>&1
+					need_restart="${need_restart} ${veid}"
+				fi
+			fi
+		fi
+		if [ -z "${header}" ]; then
+			__echo "Starting CT:"
+			header=1
+		fi
+		__echo " ${veid}"
+
+		$VZCTL start ${veid} >/dev/null 2>&1 &
+		pid=$!
+		eval VE_${pid}=${veid}
+		pids="$pids $pid"
+		iter=$(($iter+1))
+		if [ ${iter} -ge ${VE_PARALLEL} ]; then
+			echo
+			for pid in ${pids}; do
+				veid=`eval echo \\$VE_${pid}`
+				unset VE_${pid}
+				__echo "Container ${veid} start: "
+				wait ${pid}
+				print_result
+			done
+			pids=
+			iter=0
+			header=
+		fi
+	done
+
+	[ -n "${pids}" ] && echo
+	for pid in ${pids}; do
+		veid=`eval echo \\$VE_${pid}`
+		unset VE_${pid}
+		__echo "Container ${veid} start: "
+		wait ${pid}
+		print_result
+	done
+
+	for veid in ${need_restart}; do
+		__echo "Stopping CT ${veid}: "
+		$VZCTL stop ${veid} 2>&1 >/dev/null 2>&1
+		print_result "$msg"
+		__echo "Starting CT ${veid}: "
+		msg=`$VZCTL start ${veid} 2>&1`
+		print_result "$msg"
+	done
+}
+
+stop_ves()
+{
+	local veid velist i iter pid pids msg stage stages ret
+
+	if ! get_veinfo; then
+		return
+	fi
+
+	# Pre-stop stage
+	rm -f $VZREBOOTDIR/*
+	velist=$(vzlist -1 2>/dev/null)
+	for veid in $velist; do
+		# Equalize cpuunits for all CTs
+		$VZCTL set $veid --cpuunits 2000 >/dev/null 2>&1
+		# Save to vzreboot list
+		touch $VZREBOOTDIR/$veid
+	done
+
+	get_parallel
+	stages="stop"
+	if [ -z "${VE_STOP_MODE}" -o "$VE_STOP_MODE" = "suspend" ]; then
+		stages="suspend stop"
+	fi
+	for stage in $stages; do
+		case $stage in
+			suspend)
+				msg='Suspending CT'
+				;;
+			stop)
+				msg='Shutting down CT'
+				;;
+		esac
+		for i in 0 1 2; do
+			iter=0
+			pids=
+			header=
+			velist=$(vzlist -H -o ctid -sbootorder 2>/dev/null)
+			for veid in $velist; do
+				if [ "$stage" = "stop" ]; then
+					# Unset limits for CT to stop fast
+					$VZCTL set $veid --cpulimit 0 --iolimit 0 --iopslimit 0 >/dev/null 2>&1
+				fi
+				if [ -z "${header}" ]; then
+					__echo "$msg:"
+					header=1
+				fi
+				__echo " ${veid}"
+				$VZCTL --skiplock $stage $veid >/dev/null 2>&1 &
+				pid=$!
+				eval VE_${pid}=${veid}
+				pids="$pids $pid"
+				iter=$(($iter+1))
+				if [ ${iter} -ge ${VE_PARALLEL} ]; then
+					echo
+					for pid in ${pids}; do
+						veid=`eval echo \\$VE_${pid}`
+						unset VE_${pid}
+						__echo "Container ${veid} $stage: "
+						wait ${pid}
+						print_result
+					done
+					pids=
+					iter=0
+					header=
+				fi
+			done
+			[ -n "${pids}" ] && echo
+			for pid in $pids; do
+				veid=`eval echo \\$VE_${pid}`
+				unset VE_${pid}
+				__echo "Container ${veid} $stage: "
+				wait $pid
+				print_result
+			done
+		done
+	done
+}
+
+umount_ves()
+{
+	local iter=0
+	local fail=1
+	local m mounts msg quota
+
+	# umount all simfs mounts
+	while test $iter -lt 5 -a $fail -ne 0; do
+		fail=0
+		mounts=`awk '{if ($3=="simfs") print $2}' /proc/mounts`
+		for m in $mounts; do
+			__echo "Unmounting CT area "
+			echo -n $m
+			msg=`umount $m 2>&1`
+			if [ $? -eq 0 ]; then
+				print_success
+			else
+				print_failure "$msg"
+				fail=$((fail+1))
+				fuser -k -m ${m} > /dev/null 2>&1
+			fi
+		done
+		iter=$(($iter+1))
+	done
+	# turn quota off
+	quota=`awk -F: '/^[0-9]+:/{print $1}' /proc/vz/vzquota 2>/dev/null`
+	for m in ${quota}; do
+		__echo "Turn quota off for CT "
+		echo -n $m
+		msg=`vzquota off ${m} 2>&1`
+		print_result "$msg"
+	done
+}
+
+lockfile()
+{
+	local TEMPFILE="${1}.$$"
+	local LOCKFILE="${1}"
+
+	trap -- "rm -f ${LOCKFILE} ${TEMPFILE}" EXIT
+
+	echo $$ > ${TEMPFILE} 2> /dev/null || {
+		echo "Can't write to ${TEMPFILE}"
+	}
+	ln ${TEMPFILE} ${LOCKFILE} >/dev/null 2>&1 && {
+		rm -f ${TEMPFILE};
+		return 0;
+	}
+	kill -0 `cat $LOCKFILE` >/dev/null 2>&1 && {
+		trap -- - EXIT
+		return 1;
+	}
+	ln ${TEMPFILE} ${LOCKFILE} >/dev/null 2>&1 && {
+		rm -f ${TEMPFILE};
+		return 0;
+	}
+	rm -f ${LOCKFILE}
+	echo $$ > ${LOCKFILE}
+	return 0
+}
+
+start()
+{
+	local veid
+	local velist
+	local msg
+	local mod
+
+	check_vzkernel
+	check_kernel_config
+
+	if ! lockfile $LOCKFILE; then
+		__echo "OpenVZ is locked"
+		print_failure
+		return 1
+	fi
+	if [ -f ${SUBSYS_VZ} ]; then
+		__echo "OpenVZ already running"
+		print_failure
+		return 1
+	fi
+
+	# One-time sysctl.conf setup
+	if test -z "$SKIP_SYSCTL_SETUP"; then
+		@SCRIPTDIR@/vz-postinstall sysctl
+		echo "SKIP_SYSCTL_SETUP=yes" >> ${VZCONF}
+	fi
+
+	__echo "Starting OpenVZ: "
+	load_modules "${IPT_MODULES}"
+	for mod in $PRELOAD_MODULES; do
+		/sbin/modprobe -r $mod >/dev/null 2>&1
+		/sbin/modprobe $mod >/dev/null 2>&1
+	done
+	for mod in $MODULES; do
+		/sbin/modprobe $mod >/dev/null 2>&1
+		RETVAL=$?
+		if [ $RETVAL -ne 0 ]; then
+			print_failure "failed to load module ${mod}"
+			return $RETVAL
+		fi
+	done
+	load_modules "${MODULES_OTHER} ${VZFS_MODULES} ${PLOOP_MODULES}"
+	print_success "loading OpenVZ modules"
+
+	if [ ! -e /dev/vzctl ]; then
+		# On most modern distros udev will create a device for you,
+		# while on the old distros /dev/vzctl comes with vzctl rpm.
+		# So the below mknod call is probably not needed at all.
+		/bin/mknod -m 600 /dev/vzctl c 126 0 > /dev/null 2>&1
+		RETVAL=$?
+		if [ $RETVAL -ne 0 ]; then
+			print_failure "creating /dev/vzctl"
+			return $RETVAL
+		fi
+	fi
+
+	if [ -f /proc/vz/oom_score_adj ]; then
+		__echo "Applying OOM adjustments: "
+		cat /etc/vz/oom-groups.conf > /proc/vz/oom_score_adj
+		print_result
+	fi
+
+	start_net
+	setup_ve0
+	fix_updatedb
+	start_ves
+
+	# Try to run vzstats to report new kernel
+	vzstats >/dev/null 2>&1
+
+	rm -f $LOCKFILE
+	touch $SUBSYS_VZ
+}
+
+stop()
+{
+	local mod
+
+	# Avoid stop action inside a CT, check we are in CT0
+	if test -r /proc/user_beancounters; then
+		if ! egrep -q '^[[:space:]]*0:[[:space:]]' \
+			/proc/user_beancounters; then
+			print_failure "Looks like we are inside a container!"
+			RETVAL=1
+			return 1
+		fi
+	fi
+
+	if ! lockfile $LOCKFILE; then
+		__echo "OpenVZ is locked"
+		print_failure
+		RETVAL=1
+		return 1
+	fi
+
+	stop_ves
+	umount_ves
+	umount_cgroups
+	stop_net
+	__echo "Stopping OpenVZ: "
+	for mod in ${MODULES_OTHER} ${MODULES} ${PRELOAD_MODULES} \
+			${IPT_MODULES} ${VZFS_MODULES} ${PLOOP_MODULES}; do
+		/sbin/modprobe -r ${mod} > /dev/null 2>&1
+	done
+	rm -f $LOCKFILE
+	rm -f $SUBSYS_VZ
+	print_success
+}
+
+load_modules()
+{
+	local modules="$1"
+	local mod
+
+	for mod in ${modules}; do
+		if /sbin/lsmod | grep -qw ${mod}; then
+			continue
+		fi
+		/sbin/modprobe ${mod} >/dev/null 2>&1
+	done
+}
+
+# See how we were called.
+case "$1" in
+  start)
+	start
+	;;
+  stop)
+	stop
+	;;
+  restart|force-reload)
+	stop
+	start
+	;;
+  status)
+	status
+	RETVAL=$?
+	;;
+  *)
+	echo "Usage: $0 {start|stop|status|restart|force-reload}"
+	exit 3
+esac
+
+exit $RETVAL

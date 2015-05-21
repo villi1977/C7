@@ -1,0 +1,125 @@
+#!/bin/bash
+# OpenVZ post-install script
+# Copyright (C) 2009-2013, Parallels, Inc. Licensed under GNU GPL.
+#
+# 1. tune /etc/sysctl.conf
+# 2. disable selinux
+
+
+# Error out
+fatal()
+{
+	echo "$0: FATAL ERROR:" $* 1>&2
+	exit 1
+}
+
+# Checks if the file exists and is writable
+# $*: file name(s)
+check_file()
+{
+	local file
+
+	for file in $*; do
+		test -a $file || fatal "$file not found"
+		test -w $file || fatal "$file is not writable"
+	done
+}
+
+# Changes the value of param, or adds it.
+# $1: file name
+# $2: parameter name
+# $3: new parameter value
+# $4: optional 'noadd' if you don't want to add a non-existing parameter
+change_param()
+{
+	local file=$1 p=$2 v=$3
+	# Escape dots, to be used for regexps
+	local pp=${p//./\\.}
+
+	# Check if param is there
+	if grep -q "^[ \t]*${p}[ \t]*=.*" $file; then
+		grep -q "^[ \t]*${p}[ \t]*=[ \t]*${v}$" $file && return
+		# Replace the value
+		echo "vz-postinstall: $file: set $p = $v"
+		sed -i -e \
+			"s/^\([ \t]*${p}[ \t]*=[ \t]*\).*\$/\1${v}/" \
+			$file
+	elif test "x$4" != 'xnoadd'; then  # Add the param
+		# If EOL is missing at the last line, fix
+		sed -i -e '$q' $file
+		# Add param
+		echo "vz-postinstall: $file: add $p = $v"
+		echo "${p}=${v}" >> $file
+	fi
+}
+
+# Modifies and reloads sysctl parameters
+tune_sysctl()
+{
+	local file=/etc/sysctl.conf
+
+	check_file $file
+	change_param $file net.ipv4.ip_forward			1
+	change_param $file net.ipv4.conf.default.proxy_arp	0
+	change_param $file kernel.sysrq				1
+	change_param $file net.ipv4.conf.default.send_redirects	1
+	change_param $file net.ipv4.conf.all.send_redirects	0
+# https://bugzilla.openvz.org/2641
+	change_param $file net.bridge.bridge-nf-call-ip6tables	1 noadd
+	change_param $file net.bridge.bridge-nf-call-iptables	1 noadd
+	sysctl -q -p 2>/dev/null
+}
+
+# Disables SELinux
+disable_selinux()
+{
+	local file=/etc/sysconfig/selinux
+
+	# If there's no /etc/sysconfig, just skip
+	test -d $(dirname $file) || return
+
+	# If there's no $file, create it
+	test -a $file || touch $file
+
+	# Check we can write to it
+	check_file $file
+
+	# Put SELINUX=disabled
+	change_param $file SELINUX disabled
+}
+
+# Disables updating kernel package so we stay with OpenVZ kernel
+disable_kernel()
+{
+	local file=/etc/yum.conf
+
+	# if there is no file, nothing to do
+	test -a $file || return 0
+
+	# Check we can write to it
+	check_file $file
+
+	if ! grep -qE '^exclude=kernel$' $file; then
+		echo "vz-postinstall: $file: add exclude=kernel"
+		cat << EOF >> $file
+
+# Added by OpenVZ -- don't let distro kernels to replace OpenVZ ones
+exclude=kernel
+EOF
+	fi
+}
+
+case $1 in
+	selinux)
+		disable_selinux
+		;;
+	sysctl)
+		tune_sysctl
+		;;
+	yum)
+		disable_kernel
+		;;
+	*)
+		echo "Usage: $0 selinux | sysctl | yum" 1>&2
+		exit 1
+esac
