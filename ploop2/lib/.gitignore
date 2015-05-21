@@ -1,5 +1,0 @@
-.depend
-*.o
-libploop.a
-libploop.so
-symbols.c
