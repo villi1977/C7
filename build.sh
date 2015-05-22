@@ -1,4 +1,4 @@
-d /usr/local/src/
+cd /usr/local/src/
 yum -y install rpm-build redhat-rpm-config gcc ncurses-devel git bc
 git clone https://src.openvz.org/scm/ovz/vzkernel.git
 cd vzkernel
