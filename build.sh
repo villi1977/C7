@@ -11,11 +11,10 @@ rpm -i /root/rpmbuild/RPMS/x86_64/e2fsprogs-*
 #git clone https://src.openvz.org/scm/ovzl/vzpkg.git
 cd ploop
 make rpms
+rpm --force --nodeps -Uvh /root/rpmbuild/RPMS/x86_64/ploop-*
 cd ../vzquota/
 make rpms
-rpm --force -Uvh /root/rpmbuild/RPMS/x86_64/ploop-*
 rpm --force --nodeps -Uvh /root/rpmbuild/RPMS/x86_64/vzquota*
-rpm --force -Uvh /root/rpmbuild/RPMS/noarch/ploop*
 cd ../vzctl
 ./autogen.sh
 make rpms
