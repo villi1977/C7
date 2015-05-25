@@ -21,4 +21,4 @@ make rpms
 cd ../vzstats
 make rpms
 rpm --force -Uvh /root/rpmbuild/RPMS/noarch/vzstats*
-rpm --force -Uvh /root/rpmbuild/RPMS/x86_64/vzctl*
+rpm --force -Uvh --nodeps /root/rpmbuild/RPMS/x86_64/vzctl*
