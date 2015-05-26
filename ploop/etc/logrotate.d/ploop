@@ -1,7 +1,0 @@
-/var/log/ploop.log {
-    monthly
-    rotate 6
-    copytruncate
-    notifempty
-    missingok
-}
