@@ -1,0 +1,15 @@
+[submodule "ploop"]
+	path = ploop
+	url = https://src.openvz.org/scm/ovzl/ploop.git
+[submodule "vzctl"]
+	path = vzctl
+	url = https://src.openvz.org/scm/ovzl/vzctl.git
+[submodule "vzpkg"]
+	path = vzpkg
+	url = https://src.openvz.org/scm/ovzl/vzpkg.git
+[submodule "vzquota"]
+	path = vzquota
+	url = https://src.openvz.org/scm/ovzl/vzquota.git
+[submodule "vzstats"]
+	path = vzstats
+	url = https://src.openvz.org/scm/ovzl/vzstats.git
